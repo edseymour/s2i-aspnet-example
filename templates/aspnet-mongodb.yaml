@@ -1,0 +1,286 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: aspnetcore-mongodb-persistent
+objects:
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}:latest
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      contextDir: ${GIT_CONTEXTDIR}
+      git:
+#        uri: https://github.com/edseymour/s2i-aspnet-example.git
+        uri: ${GIT_URI}
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: dotnetcore-10-rhel7:latest
+          namespace: openshift
+      type: Source
+    triggers:
+    - github:
+        secret: 3Nx2NCwPwSH3GYz1sQ-O
+      type: GitHub
+    - generic:
+        secret: kXHjhpg7vBi3lcQTchKr
+      type: Generic
+    - type: ConfigChange
+    - imageChange: {}
+      type: ImageChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}-db
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}-db
+    strategy:
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          name: ${NAME}-db
+      spec:
+        containers:
+        - env:
+          - name: MONGODB_USER
+            value: ${MONGODB_USER}
+          - name: MONGODB_PASSWORD
+            value: ${MONGODB_PASSWORD}
+          - name: MONGODB_DATABASE
+            value: ${MONGODB_DATABASE}
+          - name: MONGODB_ADMIN_PASSWORD
+            value: ${MONGODB_ADMIN_PASSWORD}
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 27017
+            timeoutSeconds: 1
+          name: mongodb
+          ports:
+          - containerPort: 27017
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - mongo 127.0.0.1:27017/$MONGODB_DATABASE -u $MONGODB_USER -p $MONGODB_PASSWORD
+                --eval="quit()"
+            failureThreshold: 3
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: 512Mi
+          securityContext:
+            capabilities: {}
+            privileged: false
+          terminationMessagePath: /dev/termination-log
+          volumeMounts:
+          - mountPath: /var/lib/mongodb/data
+            name: ${NAME}-db-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: ${NAME}-db-data
+          persistentVolumeClaim:
+            claimName: ${NAME}-db
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - mongodb
+        from:
+          kind: ImageStreamTag
+          name: mongodb:3.2
+          namespace: openshift
+        lastTriggeredImage: ""
+      type: ImageChange
+    - type: ConfigChange
+  status: {}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}
+  spec:
+    replicas: 1
+    selector:
+      aspapp: ${NAME}
+      deploymentconfig: ${NAME}
+    strategy:
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        annotations: {}
+        labels:
+          aspapp: ${NAME}
+          deploymentconfig: ${NAME}
+      spec:
+        containers:
+        - image: ' '
+          imagePullPolicy: Always
+          name: ${NAME}
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          - containerPort: 8081
+            protocol: TCP
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${NAME}
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}:latest
+      type: ImageChange
+  status: {}
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}
+  spec:
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: ${NAME}
+      weight: 100
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}-db
+  spec:
+    ports:
+    - name: mongo
+      port: 27017
+      protocol: TCP
+      targetPort: 27017
+    selector:
+      name: ${NAME}-db
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    - name: 8081-tcp
+      port: 8081
+      protocol: TCP
+      targetPort: 8081
+    selector:
+      aspapp: ${NAME}
+      deploymentconfig: ${NAME}
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    annotations: {}
+    labels:
+      aspapp: ${NAME}
+    name: ${NAME}-db
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+parameters:
+- name: NAME
+  description: Enter the name of your applications
+  required: true
+- name: GIT_URI
+  description: Enter the git repository URI
+  required: true
+  value: https://github.com/edseymour/s2i-aspnet-example.git
+- name: GIT_CONTEXTDIR
+  description: Enter a subdirectory in repository that contains application source code
+  value: app
+- name: MONGODB_USER
+  value: mongouser
+  description: Database user
+- name: MONGODB_PASSWORD
+  value: mongopass
+  description: Database user password
+- name: MONGODB_DATABASE
+  value: mongomvc
+  description: Database name
+- name: MONGODB_ADMIN_PASSWORD
+  description: Mongo DB admin password
+  value: adminpass
+
